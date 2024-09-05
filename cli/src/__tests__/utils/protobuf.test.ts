@@ -1,5 +1,5 @@
 import { serializeProtobufToBuffer, deserializeBufferToProtobuf } from '../../utils/protobuf'
-import { expect, describe, it, beforeEach } from '@jest/globals'
+import { expect, describe, it } from '@jest/globals'
 import logWrapper from '../../utils/logWrapper'
 import * as protobuf from 'protobufjs'
 import * as path from 'path'
@@ -24,24 +24,32 @@ const protoSchema = `
   }
 `
 
+// unified input & target output
 const jsonMessage = '{"deviceId":"123456", "sensorType": "Temperature", "value": 22.5, "timestamp": 16700}'
 const message = JSON.parse(jsonMessage)
 
+const root = protobuf.parse(protoSchema).root
+const SensorData = root.lookupType('SensorData')
+const serializedMessage = SensorData.encode(SensorData.create(message)).finish()
+
+// for serialization
+const targetBuffer = Buffer.from(serializedMessage)
+
+// for deserialization
+const inputBuffer = Buffer.from(serializedMessage)
+const targetMessage = JSON.stringify(SensorData.decode(inputBuffer).toJSON())
+
 describe('protobuf', () => {
+  beforeEach(() => {
+    jest.clearAllMocks()
+  })
+
   describe('serializeProtobufToBuffer', () => {
     it('should serialize JSON message with a protobuf schema correctly', () => {
       const resultBuffer = serializeProtobufToBuffer(jsonMessage, mockProtoPath, 'SensorData')
       expect(resultBuffer).toBeInstanceOf(Buffer)
 
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const decodedMessage = SensorData.decode(resultBuffer)
-      expect(decodedMessage.toJSON()).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
-      })
+      expect(targetBuffer.equals(resultBuffer)).toBe(true)
     })
 
     it('should throw an error if input message does not follow JSON format', () => {
@@ -54,23 +62,26 @@ describe('protobuf', () => {
 
     it('should log an error and exit if message does not match schema', () => {
       const invalidMessage = Buffer.from('{"invalidField": "value"}')
-      serializeProtobufToBuffer(invalidMessage, mockProtoPath, 'SensorData')
+
+      // BUG: Can not trigger line 17-18 of protobuf.ts
+      // `protobuf.Type.verify` seems to be working in an unexpected way.
+      // With `invalidMessage` as `raw`, no error is triggerred.
+      expect(() => {
+        serializeProtobufToBuffer(invalidMessage, mockProtoPath, 'SensorData')
+      }).toThrow()
+      expect(logWrapper.fail).toHaveBeenCalledWith(
+        expect.stringMatching(/Unable to serialize message to protobuf buffer:*/),
+      )
       expect(mockExit).toHaveBeenCalledWith(1)
     })
 
     it('should handle Buffer input correctly', () => {
       const bufferInput = Buffer.from(jsonMessage)
-      const result = serializeProtobufToBuffer(bufferInput, mockProtoPath, 'SensorData')
-      expect(result).toBeInstanceOf(Buffer)
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const decodedMessage = SensorData.decode(result)
-      expect(decodedMessage.toJSON()).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
-      })
+
+      const resultBuffer = serializeProtobufToBuffer(bufferInput, mockProtoPath, 'SensorData')
+
+      expect(resultBuffer).toBeInstanceOf(Buffer)
+      expect(targetBuffer.equals(resultBuffer)).toBe(true)
     })
 
     it('should throw an error if protobuf schema file is not found', () => {
@@ -80,6 +91,7 @@ describe('protobuf', () => {
       expect(mockExit).toHaveBeenCalledWith(1)
     })
 
+    // INFO: only this test case can trigger line 17-18
     it('should handle verification errors from protobuf', () => {
       const invalidMessage = '{"deviceId": 123}' // deviceId should be a string
       expect(() => serializeProtobufToBuffer(invalidMessage, mockProtoPath, 'SensorData')).toThrow()
@@ -90,83 +102,56 @@ describe('protobuf', () => {
 
   describe('deserializeBufferToProtobuf', () => {
     it('should deserialize Buffer to string with a protobuf schema correctly', () => {
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const buffer = SensorData.encode(SensorData.create(message)).finish()
       // Test without format
-      const resultWithoutFormat = deserializeBufferToProtobuf(
-        Buffer.from(buffer),
-        mockProtoPath,
-        'SensorData',
-        undefined,
-      )
+      const resultWithoutFormat = deserializeBufferToProtobuf(inputBuffer, mockProtoPath, 'SensorData', false)
       expect(typeof resultWithoutFormat).toBe('string')
-      expect(JSON.parse(resultWithoutFormat as string)).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
-      })
+
+      expect(resultWithoutFormat as string).toEqual(targetMessage)
     })
 
-    it('should deserialize Buffer to string with a protobuf schema correctly with json format', () => {
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const buffer = SensorData.encode(SensorData.create(message)).finish()
-      // Test with format
-      const resultWithFormat = deserializeBufferToProtobuf(Buffer.from(buffer), mockProtoPath, 'SensorData', 'json')
-      expect(resultWithFormat).toBeInstanceOf(Buffer)
-      expect(JSON.parse(resultWithFormat.toString())).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
+    describe('should deserialize Buffer to string with format, Buffer without format', () => {
+      it('should return JSON string without format', () => {
+        const result = deserializeBufferToProtobuf(inputBuffer, mockProtoPath, 'SensorData', false)
+        expect(typeof result).toBe('string')
+        expect(() => JSON.parse(result as string)).not.toThrow()
+
+        expect(result as string).toEqual(targetMessage)
+      })
+
+      it('should return Buffer with format', () => {
+        const result = deserializeBufferToProtobuf(inputBuffer, mockProtoPath, 'SensorData', true)
+        expect(result).toBeInstanceOf(Buffer)
+
+        expect(result.toString()).toEqual(targetMessage)
       })
     })
 
     it('should log an error and exit if buffer is not valid protobuf', () => {
-      const invalidBuffer = Buffer.from('{"invalidField": "value"}')
+      const invalidBuffer = Buffer.from([0x08, 0x96, 0x01]) // An invalid protobuf buffer
 
-      expect(() => deserializeBufferToProtobuf(invalidBuffer, mockProtoPath, 'SensorData', 'json')).toThrow()
+      // BUG: Can not trigger line 42-43 of protobuf.ts
+      // `protobuf.Type.verify` seems to be working in an unexpected way.
+      // With `invalidBuffer` as `payload`, the decoded message is '{"deviceId":""}' and no error is triggerred.
+      expect(() => deserializeBufferToProtobuf(invalidBuffer, mockProtoPath, 'SensorData', true)).toThrow()
+      // error message is generated by function `transformPBJSError`
       expect(logWrapper.fail).toHaveBeenCalledWith(expect.stringMatching(/Message deserialization error:*/))
       expect(mockExit).toHaveBeenCalledWith(1)
     })
 
     it('should handle verification errors from protobuf during deserialization', () => {
-      const invalidBuffer = Buffer.from([0x08, 0x96, 0x01]) // An invalid protobuf message
-      deserializeBufferToProtobuf(invalidBuffer, mockProtoPath, 'SensorData', undefined)
-      expect(logWrapper.fail).toHaveBeenCalledWith(expect.stringMatching(/Message deserialization error:*/))
+      const unmatchedMessage = JSON.parse('{"invalidField": "value"}')
+      const serializedMessage = SensorData.encode(SensorData.create(unmatchedMessage)).finish()
+
+      const unmatchedBuffer = Buffer.from(serializedMessage)
+
+      // BUG: Can not trigger line 42-43 of protobuf.ts
+      // `protobuf.Type.verify` seems to be working in an unexpected way.
+      // With `unmatchedBuffer` as `payload`, the decoded message is empty and no error is triggerred.
+      expect(() => deserializeBufferToProtobuf(unmatchedBuffer, mockProtoPath, 'SensorData', true)).toThrow()
+      expect(logWrapper.fail).toHaveBeenCalledWith(
+        expect.stringMatching(/Unable to deserialize protobuf encoded buffer:*/),
+      )
       expect(mockExit).toHaveBeenCalledWith(1)
-    })
-
-    it('should return JSON string when needFormat is undefined', () => {
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const buffer = SensorData.encode(SensorData.create(message)).finish()
-
-      const result = deserializeBufferToProtobuf(Buffer.from(buffer), mockProtoPath, 'SensorData', undefined)
-      expect(typeof result).toBe('string')
-      expect(JSON.parse(result as string)).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
-      })
-    })
-
-    it('should return Buffer when needFormat is defined', () => {
-      const root = protobuf.parse(protoSchema).root
-      const SensorData = root.lookupType('SensorData')
-      const buffer = SensorData.encode(SensorData.create(message)).finish()
-
-      const result = deserializeBufferToProtobuf(Buffer.from(buffer), mockProtoPath, 'SensorData', 'json')
-      expect(result).toBeInstanceOf(Buffer)
-      expect(JSON.parse(result.toString())).toEqual({
-        deviceId: '123456',
-        sensorType: 'Temperature',
-        value: 22.5,
-        timestamp: '16700',
-      })
     })
   })
 })

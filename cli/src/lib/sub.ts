@@ -45,7 +45,7 @@ const processReceivedMessage = (
           payload,
           schemaOptions.protobufPath,
           schemaOptions.protobufMessageName,
-          format,
+          format ? true : false,
         )
 
       case 'avro':

@@ -14,7 +14,8 @@ export const serializeProtobufToBuffer = (
     const Message = root.lookupType(protobufMessageName)
     const err = Message.verify(JSON.parse(rawData))
     if (err) {
-      logWrapper.fail(`Message serialization error: ${err}`)
+      console.log('serialization verification error!')
+      logWrapper.fail(`Unable to serialize message to protobuf buffer: ${err}`)
       process.exit(1)
     }
     const data = Message.create(JSON.parse(rawData))
@@ -31,7 +32,7 @@ export const deserializeBufferToProtobuf = (
   payload: Buffer,
   protobufPath: string,
   protobufMessageName: string,
-  needFormat: FormatType | undefined,
+  needFormat: boolean,
 ): string | Buffer => {
   try {
     const root = protobuf.loadSync(protobufPath)
@@ -39,7 +40,8 @@ export const deserializeBufferToProtobuf = (
     const MessageData = Message.decode(payload)
     const err = Message.verify(MessageData)
     if (err) {
-      logWrapper.fail(`Message deserialization error: ${err}`)
+      console.log('deserialization verification error!')
+      logWrapper.fail(`Unable to deserialize protobuf encoded buffer: ${err}`)
       process.exit(1)
     }
     if (needFormat) {

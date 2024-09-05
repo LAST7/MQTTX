@@ -34,6 +34,7 @@ describe('avro', () => {
   beforeEach(() => {
     // clear schema cache before each test
     clearCache()
+    jest.clearAllMocks()
   })
 
   describe('getAvroType', () => {
@@ -53,8 +54,8 @@ describe('avro', () => {
     })
 
     it('should throw an error if file does not exist', () => {
-      const nonExistFilePath = path.join(__dirname, 'file_not_exists')
-      expect(() => getAvroType(nonExistFilePath)).toThrow()
+      const nonExistentPath = 'non/existent/path.avsc'
+      expect(() => getAvroType(nonExistentPath)).toThrow()
       expect(logWrapper.fail).toHaveBeenCalledWith(expect.stringMatching(/Unable to load avro schema from *:*/))
       expect(mockExit).toHaveBeenCalledWith(1)
     })
@@ -81,11 +82,9 @@ describe('avro', () => {
     })
 
     it('should throw an error if message does not match schema', async () => {
-      const unmatchedMessageObj = JSON.parse(jsonMessage)
-      delete unmatchedMessageObj.deviceId
-      const unmatchedMessage = JSON.stringify(unmatchedMessageObj)
+      const invalidMessage = '{"invalidField": "value"}'
 
-      expect(() => serializeAvroToBuffer(unmatchedMessage, mockSchemaPath)).toThrow()
+      expect(() => serializeAvroToBuffer(invalidMessage, mockSchemaPath)).toThrow()
       expect(logWrapper.fail).toHaveBeenCalledWith(
         expect.stringMatching(/Unable to serialize message to avro buffer:*/),
       )
@@ -110,15 +109,15 @@ describe('avro', () => {
     })
 
     it('should throw an error if Buffer is not valid avro encoded buffer', () => {
-      const randomBuffer = Buffer.from([0x4f, 0x61, 0x7a, 0x3b, 0x19, 0x8e, 0x27, 0x56, 0x9c, 0x2d, 0x73, 0x81])
+      const invalidBuffer = Buffer.from([0x08, 0x96, 0x01]) // An invalid avro buffer
 
       // test without format
-      expect(() => deserializeBufferToAvro(randomBuffer, mockSchemaPath, false)).toThrow()
+      expect(() => deserializeBufferToAvro(invalidBuffer, mockSchemaPath, false)).toThrow()
       expect(logWrapper.fail).toHaveBeenCalledWith(expect.stringMatching(/Unable to deserialize avro encoded buffer:*/))
       expect(mockExit).toHaveBeenCalledWith(1)
 
       // test with format
-      expect(() => deserializeBufferToAvro(randomBuffer, mockSchemaPath, true)).toThrow()
+      expect(() => deserializeBufferToAvro(invalidBuffer, mockSchemaPath, true)).toThrow()
       expect(logWrapper.fail).toHaveBeenCalledWith(expect.stringMatching(/Unable to deserialize avro encoded buffer:*/))
       expect(mockExit).toHaveBeenCalledWith(1)
     })
